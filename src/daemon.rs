@@ -38,6 +38,7 @@ pub enum DaemonError {
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcRequest {
     Ping,
+    Shutdown,
     CreateSession { target: RunTarget },
     StartRun { session_id: String, input: String },
     ReplayDisplayEvents { run_id: String, after_sequence: u64 },
@@ -46,6 +47,7 @@ enum IpcRequest {
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcResponse {
     Pong,
+    Stopping,
     Session { session: SessionRecord },
     Run { run: RunRecord },
     DisplayEvents { events: Vec<DisplayEvent> },
@@ -92,7 +94,12 @@ impl LocalDaemonIpcServer {
             while server_running.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _addr)) => {
-                        let _ = serve_ipc_connection(&mut client, stream);
+                        if matches!(
+                            serve_ipc_connection(&mut client, stream),
+                            Ok(IpcConnectionOutcome::Shutdown)
+                        ) {
+                            server_running.store(false, Ordering::SeqCst);
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(std::time::Duration::from_millis(10));
@@ -110,6 +117,10 @@ impl LocalDaemonIpcServer {
             join_handle: std::sync::Mutex::new(Some(join_handle)),
             process,
         })
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 
     pub fn stop(&self) -> Result<(), DaemonError> {
@@ -155,6 +166,13 @@ impl LocalDaemonIpcClient {
         match self.send_request(IpcRequest::Ping)? {
             IpcResponse::Pong => Ok(()),
             response => Err(unexpected_ipc_response("pong", response)),
+        }
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), DaemonError> {
+        match self.send_request(IpcRequest::Shutdown)? {
+            IpcResponse::Stopping => Ok(()),
+            response => Err(unexpected_ipc_response("stopping", response)),
         }
     }
 
@@ -249,44 +267,66 @@ fn is_transient_ipc_io_error(error: &DaemonError) -> bool {
 }
 
 #[cfg(unix)]
+enum IpcConnectionOutcome {
+    Continue,
+    Shutdown,
+}
+
+#[cfg(unix)]
 fn serve_ipc_connection(
     client: &mut LocalDaemonClient,
     mut stream: std::os::unix::net::UnixStream,
-) -> Result<(), DaemonError> {
+) -> Result<IpcConnectionOutcome, DaemonError> {
     use std::io::{Read, Write};
 
     let mut request = String::new();
     stream.read_to_string(&mut request)?;
     if request.trim().is_empty() {
-        return Ok(());
+        return Ok(IpcConnectionOutcome::Continue);
     }
     let request: IpcRequest = serde_json::from_str(&request)?;
-    let response = match request {
-        IpcRequest::Ping => IpcResponse::Pong,
+    let (response, outcome) = match request {
+        IpcRequest::Ping => (IpcResponse::Pong, IpcConnectionOutcome::Continue),
+        IpcRequest::Shutdown => (IpcResponse::Stopping, IpcConnectionOutcome::Shutdown),
         IpcRequest::CreateSession { target } => match client.create_session(target) {
-            Ok(session) => IpcResponse::Session { session },
-            Err(error) => IpcResponse::Error {
-                message: error.to_string(),
-            },
+            Ok(session) => (
+                IpcResponse::Session { session },
+                IpcConnectionOutcome::Continue,
+            ),
+            Err(error) => (
+                IpcResponse::Error {
+                    message: error.to_string(),
+                },
+                IpcConnectionOutcome::Continue,
+            ),
         },
         IpcRequest::StartRun { session_id, input } => match client.start_run(&session_id, input) {
-            Ok(run) => IpcResponse::Run { run },
-            Err(error) => IpcResponse::Error {
-                message: error.to_string(),
-            },
+            Ok(run) => (IpcResponse::Run { run }, IpcConnectionOutcome::Continue),
+            Err(error) => (
+                IpcResponse::Error {
+                    message: error.to_string(),
+                },
+                IpcConnectionOutcome::Continue,
+            ),
         },
         IpcRequest::ReplayDisplayEvents {
             run_id,
             after_sequence,
         } => match client.replay_display_events(&run_id, after_sequence) {
-            Ok(events) => IpcResponse::DisplayEvents { events },
-            Err(error) => IpcResponse::Error {
-                message: error.to_string(),
-            },
+            Ok(events) => (
+                IpcResponse::DisplayEvents { events },
+                IpcConnectionOutcome::Continue,
+            ),
+            Err(error) => (
+                IpcResponse::Error {
+                    message: error.to_string(),
+                },
+                IpcConnectionOutcome::Continue,
+            ),
         },
     };
     stream.write_all(serde_json::to_string(&response)?.as_bytes())?;
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(unix)]
