@@ -124,6 +124,7 @@ fn runtime_events_dedupe_by_event_id_and_display_events_are_projection_only() {
         json!({"text": "duplicate must not overwrite"}),
     ));
     let display = log.project_runtime_event(&runtime_event);
+    let duplicate_display = log.project_runtime_event(&duplicate);
 
     assert_eq!(first.sequence, 1);
     assert_eq!(duplicate.sequence, 1);
@@ -136,6 +137,7 @@ fn runtime_events_dedupe_by_event_id_and_display_events_are_projection_only() {
     );
     assert_eq!(display.kind, DisplayEventKind::AssistantTextDelta);
     assert_eq!(display.payload, json!({"text": "hello"}));
+    assert_eq!(duplicate_display, display);
     assert_eq!(log.replay_display("run-1", 0).len(), 1);
 }
 

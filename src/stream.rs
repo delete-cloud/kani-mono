@@ -61,6 +61,7 @@ pub struct EventLog {
     runtime_events: Vec<RuntimeEvent>,
     runtime_event_by_id: HashMap<String, usize>,
     display_events: Vec<DisplayEvent>,
+    display_event_by_runtime_event_id: HashMap<String, usize>,
 }
 
 impl EventLog {
@@ -89,6 +90,10 @@ impl EventLog {
     }
 
     pub fn project_runtime_event(&mut self, event: &RuntimeEvent) -> DisplayEvent {
+        if let Some(index) = self.display_event_by_runtime_event_id.get(&event.event_id) {
+            return self.display_events[*index].clone();
+        }
+
         let display = match event.kind {
             RuntimeEventKind::ModelDelta => DisplayEvent {
                 sequence: self.display_events.len() as u64 + 1,
@@ -123,6 +128,8 @@ impl EventLog {
                 payload: event.payload.clone(),
             },
         };
+        self.display_event_by_runtime_event_id
+            .insert(event.event_id.clone(), self.display_events.len());
         self.display_events.push(display.clone());
         display
     }
