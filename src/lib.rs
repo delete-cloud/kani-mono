@@ -1,4 +1,5 @@
 pub mod controlplane;
+pub mod daemon;
 pub mod executor;
 pub mod runtime;
 pub mod sandbox;
