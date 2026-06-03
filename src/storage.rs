@@ -29,6 +29,18 @@ pub trait ControlPlaneStore {
     fn save_checkpoint(&self, record: &CheckpointRecord) -> StoreResult<()>;
     fn load_checkpoint(&self, checkpoint_id: &str) -> StoreResult<Option<CheckpointRecord>>;
     fn list_checkpoints_for_run(&self, run_id: &str) -> StoreResult<Vec<CheckpointRecord>>;
+    fn append_runtime_event(&self, event: RuntimeEvent) -> StoreResult<RuntimeEvent>;
+    fn project_display_event(&self, event: &RuntimeEvent) -> StoreResult<DisplayEvent>;
+    fn replay_runtime_events(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> StoreResult<Vec<RuntimeEvent>>;
+    fn replay_display_events(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> StoreResult<Vec<DisplayEvent>>;
 }
 
 pub struct SqliteControlPlaneStore {
@@ -401,6 +413,30 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
 
     fn list_checkpoints_for_run(&self, run_id: &str) -> StoreResult<Vec<CheckpointRecord>> {
         SqliteControlPlaneStore::list_checkpoints_for_run(self, run_id)
+    }
+
+    fn append_runtime_event(&self, event: RuntimeEvent) -> StoreResult<RuntimeEvent> {
+        SqliteControlPlaneStore::append_runtime_event(self, event)
+    }
+
+    fn project_display_event(&self, event: &RuntimeEvent) -> StoreResult<DisplayEvent> {
+        SqliteControlPlaneStore::project_display_event(self, event)
+    }
+
+    fn replay_runtime_events(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> StoreResult<Vec<RuntimeEvent>> {
+        SqliteControlPlaneStore::replay_runtime_events(self, run_id, after_sequence)
+    }
+
+    fn replay_display_events(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> StoreResult<Vec<DisplayEvent>> {
+        SqliteControlPlaneStore::replay_display_events(self, run_id, after_sequence)
     }
 }
 

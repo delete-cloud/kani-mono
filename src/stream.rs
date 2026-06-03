@@ -148,6 +148,10 @@ impl EventLog {
             .cloned()
             .collect()
     }
+
+    pub fn runtime_events(&self) -> &[RuntimeEvent] {
+        &self.runtime_events
+    }
 }
 
 fn required_text_payload(payload: &Value) -> &str {
