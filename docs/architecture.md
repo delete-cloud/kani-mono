@@ -315,11 +315,15 @@ The current Rust codebase has the first architecture contracts in place:
 - `daemon` exposes the first LocalDaemon facade for local create-session,
   start-run, and display-event replay over SQLite. It is not yet a long-running
   process or network server.
+- `cli` exposes the first client command boundary and binary entrypoint for
+  creating local sessions, starting runs, and replaying DisplayEvent records
+  through the LocalDaemon facade. It currently uses the replay runtime seam, not
+  a real model provider.
 - `sandbox` implements the first workspace-scoped filesystem boundary for local
   paths.
 
 This is not a complete MVP yet. The remaining MVP work includes long-running
-daemon process wiring, CLI client commands, real provider/tool runtime
+daemon process wiring, richer CLI client commands, real provider/tool runtime
 integration, shell execution through SandboxedEnvironment, and end-to-end resume
 from durable context.
 

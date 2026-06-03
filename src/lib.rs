@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod controlplane;
 pub mod daemon;
 pub mod executor;
