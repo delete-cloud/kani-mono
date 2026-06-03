@@ -11,6 +11,8 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("runtime event not found: {0}")]
+    RuntimeEventNotFound(String),
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -158,7 +160,10 @@ impl SqliteControlPlaneStore {
     }
 
     pub fn project_display_event(&self, event: &RuntimeEvent) -> StoreResult<DisplayEvent> {
-        let display = DisplayEvent::project_from_runtime(event, 0);
+        let source = self
+            .load_runtime_event(&event.event_id)?
+            .ok_or_else(|| StoreError::RuntimeEventNotFound(event.event_id.clone()))?;
+        let display = DisplayEvent::project_from_runtime(&source, 0);
         self.connection.execute(
             "
             INSERT OR IGNORE INTO display_events (
@@ -168,9 +173,9 @@ impl SqliteControlPlaneStore {
             )
             VALUES (?1, ?2, ?3)
             ",
-            params![event.event_id, event.run_id, to_json(&display)?],
+            params![source.event_id, source.run_id, to_json(&display)?],
         )?;
-        self.load_display_event(&event.event_id)?
+        self.load_display_event(&source.event_id)?
             .ok_or_else(|| StoreError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
     }
 

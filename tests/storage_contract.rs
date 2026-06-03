@@ -187,6 +187,45 @@ fn sqlite_projects_and_replays_display_events_by_cursor() {
 }
 
 #[test]
+fn sqlite_display_projection_uses_persisted_runtime_event_payload() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("display-source.sqlite3");
+    let store = SqliteControlPlaneStore::open(&db_path).expect("store opens");
+    let stored = store
+        .append_runtime_event(RuntimeEvent::new(
+            "event-1",
+            "run-1",
+            RuntimeEventKind::ModelDelta,
+            json!({"text": "stored"}),
+        ))
+        .expect("runtime event persists");
+    let forged = RuntimeEvent::new(
+        stored.event_id.clone(),
+        "run-1",
+        RuntimeEventKind::ModelDelta,
+        json!({"text": "forged"}),
+    );
+
+    let projected = store
+        .project_display_event(&forged)
+        .expect("display projection succeeds");
+
+    assert_eq!(projected.payload, json!({"text": "stored"}));
+    assert_eq!(
+        store
+            .project_display_event(&RuntimeEvent::new(
+                "missing-event",
+                "run-1",
+                RuntimeEventKind::ModelDelta,
+                json!({"text": "missing"}),
+            ))
+            .expect_err("orphan display projection is rejected")
+            .to_string(),
+        "runtime event not found: missing-event"
+    );
+}
+
+#[test]
 fn sqlite_store_persists_checkpoint_records_by_id_and_run() {
     let dir = tempdir().expect("temp dir");
     let db_path = dir.path().join("checkpoints.sqlite3");
