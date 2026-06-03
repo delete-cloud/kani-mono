@@ -17,18 +17,30 @@ pub enum StoreError {
 
 pub type StoreResult<T> = Result<T, StoreError>;
 
-pub trait ControlPlaneStore {
+pub trait SessionStore {
     fn save_session(&self, record: &SessionRecord) -> StoreResult<()>;
     fn load_session(&self, session_id: &str) -> StoreResult<Option<SessionRecord>>;
+}
+
+pub trait RunStore {
     fn save_run(&self, record: &RunRecord) -> StoreResult<()>;
     fn load_run(&self, run_id: &str) -> StoreResult<Option<RunRecord>>;
+}
+
+pub trait InteractionStore {
     fn save_approval(&self, record: &ApprovalRecord) -> StoreResult<()>;
     fn load_approval(&self, approval_id: &str) -> StoreResult<Option<ApprovalRecord>>;
     fn save_cancel(&self, record: &CancelIntent) -> StoreResult<()>;
     fn load_cancel(&self, cancel_id: &str) -> StoreResult<Option<CancelIntent>>;
+}
+
+pub trait CheckpointStore {
     fn save_checkpoint(&self, record: &CheckpointRecord) -> StoreResult<()>;
     fn load_checkpoint(&self, checkpoint_id: &str) -> StoreResult<Option<CheckpointRecord>>;
     fn list_checkpoints_for_run(&self, run_id: &str) -> StoreResult<Vec<CheckpointRecord>>;
+}
+
+pub trait EventStore {
     fn append_runtime_event(&self, event: RuntimeEvent) -> StoreResult<RuntimeEvent>;
     fn project_display_event(&self, event: &RuntimeEvent) -> StoreResult<DisplayEvent>;
     fn replay_runtime_events(
@@ -41,6 +53,16 @@ pub trait ControlPlaneStore {
         run_id: &str,
         after_sequence: u64,
     ) -> StoreResult<Vec<DisplayEvent>>;
+}
+
+pub trait ControlPlaneStore:
+    SessionStore + RunStore + InteractionStore + CheckpointStore + EventStore
+{
+}
+
+impl<T> ControlPlaneStore for T where
+    T: SessionStore + RunStore + InteractionStore + CheckpointStore + EventStore
+{
 }
 
 pub struct SqliteControlPlaneStore {
@@ -370,7 +392,7 @@ impl SqliteControlPlaneStore {
     }
 }
 
-impl ControlPlaneStore for SqliteControlPlaneStore {
+impl SessionStore for SqliteControlPlaneStore {
     fn save_session(&self, record: &SessionRecord) -> StoreResult<()> {
         SqliteControlPlaneStore::save_session(self, record)
     }
@@ -378,7 +400,9 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
     fn load_session(&self, session_id: &str) -> StoreResult<Option<SessionRecord>> {
         SqliteControlPlaneStore::load_session(self, session_id)
     }
+}
 
+impl RunStore for SqliteControlPlaneStore {
     fn save_run(&self, record: &RunRecord) -> StoreResult<()> {
         SqliteControlPlaneStore::save_run(self, record)
     }
@@ -386,7 +410,9 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
     fn load_run(&self, run_id: &str) -> StoreResult<Option<RunRecord>> {
         SqliteControlPlaneStore::load_run(self, run_id)
     }
+}
 
+impl InteractionStore for SqliteControlPlaneStore {
     fn save_approval(&self, record: &ApprovalRecord) -> StoreResult<()> {
         SqliteControlPlaneStore::save_approval(self, record)
     }
@@ -402,7 +428,9 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
     fn load_cancel(&self, cancel_id: &str) -> StoreResult<Option<CancelIntent>> {
         SqliteControlPlaneStore::load_cancel(self, cancel_id)
     }
+}
 
+impl CheckpointStore for SqliteControlPlaneStore {
     fn save_checkpoint(&self, record: &CheckpointRecord) -> StoreResult<()> {
         SqliteControlPlaneStore::save_checkpoint(self, record)
     }
@@ -414,7 +442,9 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
     fn list_checkpoints_for_run(&self, run_id: &str) -> StoreResult<Vec<CheckpointRecord>> {
         SqliteControlPlaneStore::list_checkpoints_for_run(self, run_id)
     }
+}
 
+impl EventStore for SqliteControlPlaneStore {
     fn append_runtime_event(&self, event: RuntimeEvent) -> StoreResult<RuntimeEvent> {
         SqliteControlPlaneStore::append_runtime_event(self, event)
     }
