@@ -302,9 +302,10 @@ The current Rust codebase has the first architecture contracts in place:
   entries, and KV-cache identity across restore epochs.
 - `session` models SessionRecord, RunRecord, RunTarget, durable approval, cancel,
   and resume-as-new-run semantics.
-- `storage` provides a SQLite-backed LocalControlPlaneStore contract for
-  sessions, runs, approvals, cancels, checkpoints, runtime event replay, and
-  durable DisplayEvent projection.
+- `storage` provides SQLite-backed focused store contracts for sessions, runs,
+  approvals/cancels, checkpoints, runtime event replay, and durable DisplayEvent
+  projection. `ControlPlaneStore` remains a compatibility composition of those
+  narrower contracts.
 - `controlplane` exposes an in-memory SessionService for tests and a
   DurableSessionService backed by the store contract.
 - `executor` and `runtime` contain the first LocalDaemonExecutor and replay

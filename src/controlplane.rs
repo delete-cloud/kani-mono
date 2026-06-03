@@ -5,7 +5,9 @@ use crate::session::{
     ApprovalRecord, ApprovalStatus, CancelIntent, ResumeSnapshot, RunRecord, RunStatus, RunTarget,
     SessionError, SessionRecord,
 };
-use crate::storage::{ControlPlaneStore, StoreError};
+use crate::storage::{
+    ControlPlaneStore, EventStore, InteractionStore, RunStore, SessionStore, StoreError,
+};
 use crate::stream::{EventLog, RuntimeEvent};
 use serde_json::Value;
 use thiserror::Error;
@@ -233,7 +235,7 @@ pub struct DurableSessionService<S> {
 
 impl<S> DurableSessionService<S>
 where
-    S: ControlPlaneStore,
+    S: SessionStore + RunStore + InteractionStore,
 {
     pub fn new(store: S) -> Self {
         Self { store }
@@ -372,7 +374,12 @@ where
         self.store.save_cancel(&cancel)?;
         Ok(cancel)
     }
+}
 
+impl<S> DurableSessionService<S>
+where
+    S: EventStore,
+{
     pub fn persist_runtime_event(
         &mut self,
         event: RuntimeEvent,
@@ -385,7 +392,7 @@ where
 
 impl<S> RunControlPlane for DurableSessionService<S>
 where
-    S: ControlPlaneStore,
+    S: SessionStore + RunStore + InteractionStore,
 {
     type Error = ControlPlaneError;
 

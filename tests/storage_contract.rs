@@ -1,10 +1,27 @@
 use kani_mono::controlplane::SessionService;
 use kani_mono::session::{CheckpointRecord, RunStatus, RunTarget};
-use kani_mono::storage::SqliteControlPlaneStore;
+use kani_mono::storage::{
+    CheckpointStore, EventStore, InteractionStore, RunStore, SessionStore, SqliteControlPlaneStore,
+};
 use kani_mono::stream::{DisplayEventKind, RuntimeEvent, RuntimeEventKind};
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::tempdir;
+
+#[test]
+fn sqlite_store_implements_focused_store_contracts() {
+    fn assert_session_store<T: SessionStore>() {}
+    fn assert_run_store<T: RunStore>() {}
+    fn assert_interaction_store<T: InteractionStore>() {}
+    fn assert_checkpoint_store<T: CheckpointStore>() {}
+    fn assert_event_store<T: EventStore>() {}
+
+    assert_session_store::<SqliteControlPlaneStore>();
+    assert_run_store::<SqliteControlPlaneStore>();
+    assert_interaction_store::<SqliteControlPlaneStore>();
+    assert_checkpoint_store::<SqliteControlPlaneStore>();
+    assert_event_store::<SqliteControlPlaneStore>();
+}
 
 #[test]
 fn sqlite_store_persists_controlplane_records_across_reopen() {
