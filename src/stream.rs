@@ -56,6 +56,45 @@ pub struct DisplayEvent {
     pub payload: Value,
 }
 
+impl DisplayEvent {
+    pub fn project_from_runtime(event: &RuntimeEvent, sequence: u64) -> Self {
+        match event.kind {
+            RuntimeEventKind::ModelDelta => Self {
+                sequence,
+                run_id: event.run_id.clone(),
+                kind: DisplayEventKind::AssistantTextDelta,
+                payload: json!({
+                    "text": required_text_payload(&event.payload),
+                }),
+            },
+            RuntimeEventKind::ApprovalRequested => Self {
+                sequence,
+                run_id: event.run_id.clone(),
+                kind: DisplayEventKind::ApprovalPrompt,
+                payload: event.payload.clone(),
+            },
+            RuntimeEventKind::ToolCallStarted => Self {
+                sequence,
+                run_id: event.run_id.clone(),
+                kind: DisplayEventKind::ToolStatus,
+                payload: event.payload.clone(),
+            },
+            RuntimeEventKind::RunStarted => Self {
+                sequence,
+                run_id: event.run_id.clone(),
+                kind: DisplayEventKind::Progress,
+                payload: event.payload.clone(),
+            },
+            RuntimeEventKind::CheckpointCreated | RuntimeEventKind::RunCompleted => Self {
+                sequence,
+                run_id: event.run_id.clone(),
+                kind: DisplayEventKind::FinalResult,
+                payload: event.payload.clone(),
+            },
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct EventLog {
     runtime_events: Vec<RuntimeEvent>,
@@ -94,40 +133,8 @@ impl EventLog {
             return self.display_events[*index].clone();
         }
 
-        let display = match event.kind {
-            RuntimeEventKind::ModelDelta => DisplayEvent {
-                sequence: self.display_events.len() as u64 + 1,
-                run_id: event.run_id.clone(),
-                kind: DisplayEventKind::AssistantTextDelta,
-                payload: json!({
-                    "text": required_text_payload(&event.payload),
-                }),
-            },
-            RuntimeEventKind::ApprovalRequested => DisplayEvent {
-                sequence: self.display_events.len() as u64 + 1,
-                run_id: event.run_id.clone(),
-                kind: DisplayEventKind::ApprovalPrompt,
-                payload: event.payload.clone(),
-            },
-            RuntimeEventKind::ToolCallStarted => DisplayEvent {
-                sequence: self.display_events.len() as u64 + 1,
-                run_id: event.run_id.clone(),
-                kind: DisplayEventKind::ToolStatus,
-                payload: event.payload.clone(),
-            },
-            RuntimeEventKind::RunStarted => DisplayEvent {
-                sequence: self.display_events.len() as u64 + 1,
-                run_id: event.run_id.clone(),
-                kind: DisplayEventKind::Progress,
-                payload: event.payload.clone(),
-            },
-            RuntimeEventKind::CheckpointCreated | RuntimeEventKind::RunCompleted => DisplayEvent {
-                sequence: self.display_events.len() as u64 + 1,
-                run_id: event.run_id.clone(),
-                kind: DisplayEventKind::FinalResult,
-                payload: event.payload.clone(),
-            },
-        };
+        let display =
+            DisplayEvent::project_from_runtime(event, self.display_events.len() as u64 + 1);
         self.display_event_by_runtime_event_id
             .insert(event.event_id.clone(), self.display_events.len());
         self.display_events.push(display.clone());

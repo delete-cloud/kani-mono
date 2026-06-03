@@ -303,7 +303,8 @@ The current Rust codebase has the first architecture contracts in place:
 - `session` models SessionRecord, RunRecord, RunTarget, durable approval, cancel,
   and resume-as-new-run semantics.
 - `storage` provides a SQLite-backed LocalControlPlaneStore contract for
-  sessions, runs, approvals, cancels, and runtime event replay.
+  sessions, runs, approvals, cancels, checkpoints, runtime event replay, and
+  durable DisplayEvent projection.
 - `controlplane` exposes an in-memory SessionService for tests and a
   DurableSessionService backed by the store contract.
 - `executor` and `runtime` contain the first LocalDaemonExecutor and replay
@@ -312,9 +313,9 @@ The current Rust codebase has the first architecture contracts in place:
   paths.
 
 This is not a complete MVP yet. The remaining MVP work includes daemon process
-wiring, CLI client commands, persistent display event projection, checkpoint
-records, real provider/tool runtime integration, shell execution through
-SandboxedEnvironment, and end-to-end resume from durable context.
+wiring, CLI client commands, wiring executor event emission directly into the
+durable event store, real provider/tool runtime integration, shell execution
+through SandboxedEnvironment, and end-to-end resume from durable context.
 
 ## Completion Definition
 
