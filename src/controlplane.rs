@@ -6,7 +6,7 @@ use crate::session::{
     SessionError, SessionRecord,
 };
 use crate::storage::{ControlPlaneStore, StoreError};
-use crate::stream::EventLog;
+use crate::stream::{EventLog, RuntimeEvent};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
@@ -372,6 +372,15 @@ where
         self.store.save_cancel(&cancel)?;
         Ok(cancel)
     }
+
+    pub fn persist_runtime_event(
+        &mut self,
+        event: RuntimeEvent,
+    ) -> Result<RuntimeEvent, ControlPlaneError> {
+        let event = self.store.append_runtime_event(event)?;
+        self.store.project_display_event(&event)?;
+        Ok(event)
+    }
 }
 
 impl<S> RunControlPlane for DurableSessionService<S>
@@ -413,6 +422,37 @@ where
     {
         let run = service.start_run(session_id, input.into())?;
         let outcome = self.executor.execute(&run, events);
+        service.complete_run(&run.run_id, outcome.final_text)
+    }
+}
+
+pub struct DurableRunCoordinator<E> {
+    executor: E,
+}
+
+impl<E> DurableRunCoordinator<E>
+where
+    E: Executor,
+{
+    pub fn new(executor: E) -> Self {
+        Self { executor }
+    }
+
+    pub fn start_run<S>(
+        &mut self,
+        service: &mut DurableSessionService<S>,
+        session_id: &str,
+        input: impl Into<String>,
+    ) -> Result<RunRecord, ControlPlaneError>
+    where
+        S: ControlPlaneStore,
+    {
+        let run = service.start_run(session_id, input)?;
+        let mut events = EventLog::new();
+        let outcome = self.executor.execute(&run, &mut events);
+        for event in events.runtime_events() {
+            service.persist_runtime_event(event.clone())?;
+        }
         service.complete_run(&run.run_id, outcome.final_text)
     }
 }
