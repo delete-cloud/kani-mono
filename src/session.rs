@@ -131,6 +131,17 @@ pub struct CancelIntent {
     pub reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CheckpointRecord {
+    pub checkpoint_id: String,
+    pub run_id: String,
+    pub tape_id: String,
+    pub visible_head_seq: u64,
+    pub epoch: u64,
+    pub context_digest: String,
+    pub metadata: Value,
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SessionError {
     #[error("session not found")]
