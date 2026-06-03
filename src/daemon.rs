@@ -217,6 +217,9 @@ fn serve_ipc_connection(
 
     let mut request = String::new();
     stream.read_to_string(&mut request)?;
+    if request.trim().is_empty() {
+        return Ok(());
+    }
     let request: IpcRequest = serde_json::from_str(&request)?;
     let response = match request {
         IpcRequest::CreateSession { target } => match client.create_session(target) {

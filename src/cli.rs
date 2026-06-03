@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use crate::daemon::LocalDaemonIpcClient;
 use crate::daemon::{DaemonError, LocalDaemon};
 use crate::runtime::AgentRuntime;
 use crate::session::{RunStatus, RunTarget};
@@ -34,19 +36,25 @@ where
 #[derive(Debug, PartialEq, Eq)]
 enum CliCommand {
     CreateSession {
-        store_path: PathBuf,
+        target: ClientTarget,
         workspace_path: String,
     },
     StartRun {
-        store_path: PathBuf,
+        target: ClientTarget,
         session_id: String,
         input: String,
     },
     ReplayDisplay {
-        store_path: PathBuf,
+        target: ClientTarget,
         run_id: String,
         after_sequence: u64,
     },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ClientTarget {
+    Store { store_path: PathBuf },
+    Socket { socket_path: PathBuf },
 }
 
 impl CliCommand {
@@ -54,13 +62,13 @@ impl CliCommand {
         match args {
             [scope, action, rest @ ..] if scope == "session" && action == "create" => {
                 Ok(Self::CreateSession {
-                    store_path: PathBuf::from(required_flag(rest, "--store")?),
+                    target: required_client_target(rest)?,
                     workspace_path: required_flag(rest, "--workspace")?,
                 })
             }
             [scope, action, rest @ ..] if scope == "run" && action == "start" => {
                 Ok(Self::StartRun {
-                    store_path: PathBuf::from(required_flag(rest, "--store")?),
+                    target: required_client_target(rest)?,
                     session_id: required_flag(rest, "--session")?,
                     input: required_flag(rest, "--input")?,
                 })
@@ -68,7 +76,7 @@ impl CliCommand {
             [scope, action, rest @ ..] if scope == "display" && action == "replay" => {
                 let after = required_flag(rest, "--after")?;
                 Ok(Self::ReplayDisplay {
-                    store_path: PathBuf::from(required_flag(rest, "--store")?),
+                    target: required_client_target(rest)?,
                     run_id: required_flag(rest, "--run")?,
                     after_sequence: after
                         .parse()
@@ -76,7 +84,7 @@ impl CliCommand {
                 })
             }
             _ => Err(CliError::Usage(
-                "usage: session create --store PATH --workspace PATH | run start --store PATH --session ID --input TEXT | display replay --store PATH --run ID --after SEQ"
+                "usage: session create (--store PATH | --socket PATH) --workspace PATH | run start (--store PATH | --socket PATH) --session ID --input TEXT | display replay (--store PATH | --socket PATH) --run ID --after SEQ"
                     .to_string(),
             )),
         }
@@ -88,23 +96,23 @@ impl CliCommand {
     {
         match self {
             Self::CreateSession {
-                store_path,
+                target,
                 workspace_path,
             } => {
-                let mut daemon = LocalDaemon::open(store_path, runtime)?;
-                let session = daemon.create_session(RunTarget::local_daemon(workspace_path))?;
+                let mut client = target.open(runtime)?;
+                let session = client.create_session(RunTarget::local_daemon(workspace_path))?;
                 Ok(format!(
                     "session_id={}\ntape_id={}",
                     session.session_id, session.tape_id
                 ))
             }
             Self::StartRun {
-                store_path,
+                target,
                 session_id,
                 input,
             } => {
-                let mut daemon = LocalDaemon::open(store_path, runtime)?;
-                let run = daemon.start_run(&session_id, input)?;
+                let mut client = target.open(runtime)?;
+                let run = client.start_run(&session_id, input)?;
                 Ok(format!(
                     "run_id={}\nstatus={}\nresult={}",
                     run.run_id,
@@ -113,12 +121,12 @@ impl CliCommand {
                 ))
             }
             Self::ReplayDisplay {
-                store_path,
+                target,
                 run_id,
                 after_sequence,
             } => {
-                let daemon = LocalDaemon::open(store_path, runtime)?;
-                let events = daemon.replay_display_events(&run_id, after_sequence)?;
+                let mut client = target.open(runtime)?;
+                let events = client.replay_display_events(&run_id, after_sequence)?;
                 Ok(events
                     .iter()
                     .map(format_display_event)
@@ -129,16 +137,112 @@ impl CliCommand {
     }
 }
 
-fn required_flag(args: &[String], name: &str) -> Result<String, CliError> {
-    args.windows(2)
-        .find_map(|window| {
-            if window[0] == name {
-                Some(window[1].clone())
-            } else {
-                None
+enum CliDaemonClient<R> {
+    Store(LocalDaemon<R>),
+    #[cfg(unix)]
+    Socket(LocalDaemonIpcClient),
+}
+
+impl ClientTarget {
+    fn open<R>(self, runtime: R) -> Result<CliDaemonClient<R>, CliError>
+    where
+        R: AgentRuntime + Clone,
+    {
+        match self {
+            Self::Store { store_path } => Ok(CliDaemonClient::Store(LocalDaemon::open(
+                store_path, runtime,
+            )?)),
+            Self::Socket { socket_path } => {
+                #[cfg(unix)]
+                {
+                    Ok(CliDaemonClient::Socket(LocalDaemonIpcClient::connect(
+                        socket_path,
+                    )?))
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = socket_path;
+                    Err(CliError::Usage(
+                        "--socket is only supported on Unix platforms".to_string(),
+                    ))
+                }
             }
-        })
+        }
+    }
+}
+
+impl<R> CliDaemonClient<R>
+where
+    R: AgentRuntime + Clone,
+{
+    fn create_session(
+        &mut self,
+        default_run_target: RunTarget,
+    ) -> Result<crate::session::SessionRecord, DaemonError> {
+        match self {
+            Self::Store(daemon) => daemon.create_session(default_run_target),
+            #[cfg(unix)]
+            Self::Socket(client) => client.create_session(default_run_target),
+        }
+    }
+
+    fn start_run(
+        &mut self,
+        session_id: &str,
+        input: impl Into<String>,
+    ) -> Result<crate::session::RunRecord, DaemonError> {
+        match self {
+            Self::Store(daemon) => daemon.start_run(session_id, input),
+            #[cfg(unix)]
+            Self::Socket(client) => client.start_run(session_id, input),
+        }
+    }
+
+    fn replay_display_events(
+        &mut self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> Result<Vec<DisplayEvent>, DaemonError> {
+        match self {
+            Self::Store(daemon) => daemon.replay_display_events(run_id, after_sequence),
+            #[cfg(unix)]
+            Self::Socket(client) => client.replay_display_events(run_id, after_sequence),
+        }
+    }
+}
+
+fn required_client_target(args: &[String]) -> Result<ClientTarget, CliError> {
+    let store = optional_flag(args, "--store");
+    let socket = optional_flag(args, "--socket");
+    match (store, socket) {
+        (Some(store_path), None) => Ok(ClientTarget::Store {
+            store_path: PathBuf::from(store_path),
+        }),
+        (None, Some(socket_path)) => Ok(ClientTarget::Socket {
+            socket_path: PathBuf::from(socket_path),
+        }),
+        (Some(_), Some(_)) => Err(CliError::Usage(
+            "--store and --socket are mutually exclusive".to_string(),
+        )),
+        (None, None) => Err(CliError::Usage(
+            "missing required client target: --store PATH or --socket PATH".to_string(),
+        )),
+    }
+}
+
+fn required_flag(args: &[String], name: &str) -> Result<String, CliError> {
+    optional_flag(args, name)
         .ok_or_else(|| CliError::Usage(format!("missing required flag {name}")))
+}
+
+fn optional_flag(args: &[String], name: &str) -> Option<String> {
+    args.windows(2).find_map(|window| {
+        if window[0] == name {
+            Some(window[1].clone())
+        } else {
+            None
+        }
+    })
 }
 
 fn run_status_name(status: &RunStatus) -> &'static str {
