@@ -12,6 +12,7 @@ use crate::runtime::AgentRuntime;
 use crate::session::{RunRecord, RunTarget, SessionRecord};
 use crate::storage::{SqliteControlPlaneStore, StoreError};
 use crate::stream::DisplayEvent;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -20,6 +21,12 @@ pub enum DaemonError {
     ControlPlane(#[from] ControlPlaneError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("ipc error: {0}")]
+    Ipc(String),
     #[error("daemon process is stopped")]
     Stopped,
     #[error("daemon process failed to respond")]
@@ -28,9 +35,221 @@ pub enum DaemonError {
     ThreadPanicked,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+enum IpcRequest {
+    CreateSession { target: RunTarget },
+    StartRun { session_id: String, input: String },
+    ReplayDisplayEvents { run_id: String, after_sequence: u64 },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum IpcResponse {
+    Session { session: SessionRecord },
+    Run { run: RunRecord },
+    DisplayEvents { events: Vec<DisplayEvent> },
+    Error { message: String },
+}
+
 pub struct LocalDaemon<R> {
     store_path: PathBuf,
     runtime: R,
+}
+
+#[cfg(unix)]
+pub struct LocalDaemonIpcServer {
+    socket_path: PathBuf,
+    running: Arc<AtomicBool>,
+    join_handle: std::sync::Mutex<Option<JoinHandle<()>>>,
+    process: LocalDaemonProcess,
+}
+
+#[cfg(unix)]
+impl LocalDaemonIpcServer {
+    pub fn start<R>(
+        socket_path: impl AsRef<Path>,
+        store_path: impl AsRef<Path>,
+        runtime: R,
+    ) -> Result<Self, DaemonError>
+    where
+        R: AgentRuntime + Clone + Send + 'static,
+    {
+        use std::os::unix::net::UnixListener;
+
+        let socket_path = socket_path.as_ref().to_path_buf();
+        if socket_path.exists() {
+            std::fs::remove_file(&socket_path)?;
+        }
+        let listener = UnixListener::bind(&socket_path)?;
+        listener.set_nonblocking(true)?;
+
+        let process = LocalDaemonProcess::start(store_path, runtime)?;
+        let mut client = process.client();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_running = Arc::clone(&running);
+        let join_handle = thread::spawn(move || {
+            while server_running.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _addr)) => {
+                        let _ = serve_ipc_connection(&mut client, stream);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => {
+                        server_running.store(false, Ordering::SeqCst);
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            socket_path,
+            running,
+            join_handle: std::sync::Mutex::new(Some(join_handle)),
+            process,
+        })
+    }
+
+    pub fn stop(&self) -> Result<(), DaemonError> {
+        self.running.store(false, Ordering::SeqCst);
+        let join_handle = self
+            .join_handle
+            .lock()
+            .expect("ipc server join handle mutex poisoned")
+            .take();
+        if let Some(join_handle) = join_handle {
+            join_handle
+                .join()
+                .map_err(|_| DaemonError::ThreadPanicked)?;
+        }
+        self.process.stop()?;
+        if self.socket_path.exists() {
+            std::fs::remove_file(&self.socket_path)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LocalDaemonIpcServer {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+#[cfg(unix)]
+pub struct LocalDaemonIpcClient {
+    socket_path: PathBuf,
+}
+
+#[cfg(unix)]
+impl LocalDaemonIpcClient {
+    pub fn connect(socket_path: impl AsRef<Path>) -> Result<Self, DaemonError> {
+        let socket_path = socket_path.as_ref().to_path_buf();
+        Ok(Self { socket_path })
+    }
+
+    pub fn create_session(
+        &mut self,
+        default_run_target: RunTarget,
+    ) -> Result<SessionRecord, DaemonError> {
+        match self.send_request(IpcRequest::CreateSession {
+            target: default_run_target,
+        })? {
+            IpcResponse::Session { session } => Ok(session),
+            response => Err(unexpected_ipc_response("session", response)),
+        }
+    }
+
+    pub fn start_run(
+        &mut self,
+        session_id: &str,
+        input: impl Into<String>,
+    ) -> Result<RunRecord, DaemonError> {
+        match self.send_request(IpcRequest::StartRun {
+            session_id: session_id.to_string(),
+            input: input.into(),
+        })? {
+            IpcResponse::Run { run } => Ok(run),
+            response => Err(unexpected_ipc_response("run", response)),
+        }
+    }
+
+    pub fn replay_display_events(
+        &mut self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> Result<Vec<DisplayEvent>, DaemonError> {
+        match self.send_request(IpcRequest::ReplayDisplayEvents {
+            run_id: run_id.to_string(),
+            after_sequence,
+        })? {
+            IpcResponse::DisplayEvents { events } => Ok(events),
+            response => Err(unexpected_ipc_response("display events", response)),
+        }
+    }
+
+    fn send_request(&self, request: IpcRequest) -> Result<IpcResponse, DaemonError> {
+        use std::io::{Read, Write};
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixStream;
+
+        let mut stream = UnixStream::connect(&self.socket_path)?;
+        stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
+        stream.shutdown(Shutdown::Write)?;
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        let response: IpcResponse = serde_json::from_str(&response)?;
+        match response {
+            IpcResponse::Error { message } => Err(DaemonError::Ipc(message)),
+            response => Ok(response),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn serve_ipc_connection(
+    client: &mut LocalDaemonClient,
+    mut stream: std::os::unix::net::UnixStream,
+) -> Result<(), DaemonError> {
+    use std::io::{Read, Write};
+
+    let mut request = String::new();
+    stream.read_to_string(&mut request)?;
+    let request: IpcRequest = serde_json::from_str(&request)?;
+    let response = match request {
+        IpcRequest::CreateSession { target } => match client.create_session(target) {
+            Ok(session) => IpcResponse::Session { session },
+            Err(error) => IpcResponse::Error {
+                message: error.to_string(),
+            },
+        },
+        IpcRequest::StartRun { session_id, input } => match client.start_run(&session_id, input) {
+            Ok(run) => IpcResponse::Run { run },
+            Err(error) => IpcResponse::Error {
+                message: error.to_string(),
+            },
+        },
+        IpcRequest::ReplayDisplayEvents {
+            run_id,
+            after_sequence,
+        } => match client.replay_display_events(&run_id, after_sequence) {
+            Ok(events) => IpcResponse::DisplayEvents { events },
+            Err(error) => IpcResponse::Error {
+                message: error.to_string(),
+            },
+        },
+    };
+    stream.write_all(serde_json::to_string(&response)?.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unexpected_ipc_response(expected: &str, response: IpcResponse) -> DaemonError {
+    DaemonError::Ipc(format!(
+        "expected {expected} response, received {response:?}"
+    ))
 }
 
 enum DaemonCommand {
