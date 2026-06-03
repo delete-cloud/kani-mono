@@ -308,14 +308,16 @@ The current Rust codebase has the first architecture contracts in place:
 - `controlplane` exposes an in-memory SessionService for tests and a
   DurableSessionService backed by the store contract.
 - `executor` and `runtime` contain the first LocalDaemonExecutor and replay
-  runtime seam used by RunCoordinator contract tests.
+  runtime seam used by RunCoordinator contract tests. DurableRunCoordinator can
+  persist executor-emitted RuntimeEvent and DisplayEvent records through the
+  control-plane store.
 - `sandbox` implements the first workspace-scoped filesystem boundary for local
   paths.
 
 This is not a complete MVP yet. The remaining MVP work includes daemon process
-wiring, CLI client commands, wiring executor event emission directly into the
-durable event store, real provider/tool runtime integration, shell execution
-through SandboxedEnvironment, and end-to-end resume from durable context.
+wiring, CLI client commands, real provider/tool runtime integration, shell
+execution through SandboxedEnvironment, and end-to-end resume from durable
+context.
 
 ## Completion Definition
 
