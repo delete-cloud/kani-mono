@@ -313,8 +313,10 @@ The current Rust codebase has the first architecture contracts in place:
   persist executor-emitted RuntimeEvent and DisplayEvent records through the
   control-plane store.
 - `daemon` exposes the first LocalDaemon facade for local create-session,
-  start-run, and display-event replay over SQLite. It is not yet a long-running
-  process or network server.
+  start-run, and display-event replay over SQLite. It also has an in-process
+  LocalDaemonProcess actor with explicit stop semantics, so clients can be
+  dropped and recreated without ending the daemon. It is not yet a network
+  server.
 - `cli` exposes the first client command boundary and binary entrypoint for
   creating local sessions, starting runs, and replaying DisplayEvent records
   through the LocalDaemon facade. It currently uses the replay runtime seam, not
@@ -322,8 +324,8 @@ The current Rust codebase has the first architecture contracts in place:
 - `sandbox` implements the first workspace-scoped filesystem boundary for local
   paths.
 
-This is not a complete MVP yet. The remaining MVP work includes long-running
-daemon process wiring, richer CLI client commands, real provider/tool runtime
+This is not a complete MVP yet. The remaining MVP work includes network/IPC
+daemon serving, richer CLI client commands, real provider/tool runtime
 integration, shell execution through SandboxedEnvironment, and end-to-end resume
 from durable context.
 
