@@ -55,6 +55,8 @@ where
         .collect::<Vec<_>>();
     if is_daemon_serve(&args) {
         serve_daemon(&args[2..], runtime, input, output)
+    } else if is_daemon_status(&args) {
+        daemon_status(&args[2..], output)
     } else {
         let output_text = run_cli(args.iter().map(String::as_str), runtime)?;
         if !output_text.is_empty() {
@@ -90,6 +92,34 @@ enum ClientTarget {
 
 fn is_daemon_serve(args: &[String]) -> bool {
     matches!(args, [scope, action, ..] if scope == "daemon" && action == "serve")
+}
+
+fn is_daemon_status(args: &[String]) -> bool {
+    matches!(args, [scope, action, ..] if scope == "daemon" && action == "status")
+}
+
+fn daemon_status<Output>(args: &[String], mut output: Output) -> Result<(), CliError>
+where
+    Output: Write,
+{
+    let socket_path = PathBuf::from(required_flag(args, "--socket")?);
+    #[cfg(unix)]
+    {
+        let mut client = LocalDaemonIpcClient::connect(&socket_path)?;
+        client.ping()?;
+        writeln!(output, "daemon_status=running")?;
+        writeln!(output, "socket={}", socket_path.display())?;
+        output.flush()?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket_path;
+        let _ = output;
+        Err(CliError::Usage(
+            "daemon status is only supported on Unix platforms".to_string(),
+        ))
+    }
 }
 
 fn serve_daemon<R, Input, Output>(
