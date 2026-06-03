@@ -190,12 +190,28 @@ impl LocalDaemonIpcClient {
     }
 
     fn send_request(&self, request: IpcRequest) -> Result<IpcResponse, DaemonError> {
+        let request = serde_json::to_string(&request)?;
+        let mut last_error = None;
+        for _attempt in 0..5 {
+            match self.send_serialized_request(&request) {
+                Ok(response) => return Ok(response),
+                Err(error) if is_transient_ipc_io_error(&error) => {
+                    last_error = Some(error);
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_error.expect("transient ipc retry loop records last error"))
+    }
+
+    fn send_serialized_request(&self, request: &str) -> Result<IpcResponse, DaemonError> {
         use std::io::{Read, Write};
         use std::net::Shutdown;
         use std::os::unix::net::UnixStream;
 
         let mut stream = UnixStream::connect(&self.socket_path)?;
-        stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
+        stream.write_all(request.as_bytes())?;
         stream.shutdown(Shutdown::Write)?;
 
         let mut response = String::new();
@@ -206,6 +222,21 @@ impl LocalDaemonIpcClient {
             response => Ok(response),
         }
     }
+}
+
+#[cfg(unix)]
+fn is_transient_ipc_io_error(error: &DaemonError) -> bool {
+    matches!(
+        error,
+        DaemonError::Io(io_error)
+            if matches!(
+                io_error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::WouldBlock
+            )
+    )
 }
 
 #[cfg(unix)]

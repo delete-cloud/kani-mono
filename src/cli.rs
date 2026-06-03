@@ -1,8 +1,9 @@
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
-#[cfg(unix)]
-use crate::daemon::LocalDaemonIpcClient;
 use crate::daemon::{DaemonError, LocalDaemon};
+#[cfg(unix)]
+use crate::daemon::{LocalDaemonIpcClient, LocalDaemonIpcServer};
 use crate::runtime::AgentRuntime;
 use crate::session::{RunStatus, RunTarget};
 use crate::stream::{DisplayEvent, DisplayEventKind};
@@ -15,6 +16,8 @@ pub enum CliError {
     Usage(String),
     #[error("invalid --after value: {0}")]
     InvalidAfter(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     #[error(transparent)]
     Daemon(#[from] DaemonError),
 }
@@ -31,6 +34,34 @@ where
         .collect::<Vec<_>>();
     let command = CliCommand::parse(&args)?;
     command.execute(runtime)
+}
+
+pub fn run_cli_stdio<I, S, R, Input, Output>(
+    args: I,
+    runtime: R,
+    input: Input,
+    mut output: Output,
+) -> Result<(), CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: AgentRuntime + Clone + Send + 'static,
+    Input: Read,
+    Output: Write,
+{
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_string())
+        .collect::<Vec<_>>();
+    if is_daemon_serve(&args) {
+        serve_daemon(&args[2..], runtime, input, output)
+    } else {
+        let output_text = run_cli(args.iter().map(String::as_str), runtime)?;
+        if !output_text.is_empty() {
+            writeln!(output, "{output_text}")?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +86,52 @@ enum CliCommand {
 enum ClientTarget {
     Store { store_path: PathBuf },
     Socket { socket_path: PathBuf },
+}
+
+fn is_daemon_serve(args: &[String]) -> bool {
+    matches!(args, [scope, action, ..] if scope == "daemon" && action == "serve")
+}
+
+fn serve_daemon<R, Input, Output>(
+    args: &[String],
+    runtime: R,
+    mut input: Input,
+    mut output: Output,
+) -> Result<(), CliError>
+where
+    R: AgentRuntime + Clone + Send + 'static,
+    Input: Read,
+    Output: Write,
+{
+    let socket_path = PathBuf::from(required_flag(args, "--socket")?);
+    let store_path = PathBuf::from(required_flag(args, "--store")?);
+    #[cfg(unix)]
+    {
+        let server = LocalDaemonIpcServer::start(&socket_path, &store_path, runtime)?;
+        writeln!(
+            output,
+            "daemon_ready socket={} store={}",
+            socket_path.display(),
+            store_path.display()
+        )?;
+        output.flush()?;
+
+        let mut buffer = Vec::new();
+        input.read_to_end(&mut buffer)?;
+        server.stop()?;
+        writeln!(output, "daemon_stopped")?;
+        output.flush()?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = runtime;
+        let _ = input;
+        let _ = output;
+        Err(CliError::Usage(
+            "daemon serve is only supported on Unix platforms".to_string(),
+        ))
+    }
 }
 
 impl CliCommand {
