@@ -321,10 +321,10 @@ The current Rust codebase has the first architecture contracts in place:
 - `cli` exposes the first client command boundary and binary entrypoint for
   creating local sessions, starting runs, and replaying DisplayEvent records.
   It supports direct SQLite-backed `--store` mode and Unix socket-backed
-  `--socket` mode. It also has a minimal `daemon serve` lifecycle command that
-  starts the Unix socket daemon until stdin closes. The binary still uses the
-  replay runtime seam for direct local runs; real model provider integration
-  remains future work.
+  `--socket` mode. It also has minimal `daemon serve` and `daemon status`
+  lifecycle commands for Unix socket daemons. The binary still uses the replay
+  runtime seam for direct local runs; real model provider integration remains
+  future work.
 - `sandbox` implements the first workspace-scoped filesystem boundary for local
   paths.
 

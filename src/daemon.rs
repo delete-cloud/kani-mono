@@ -37,6 +37,7 @@ pub enum DaemonError {
 
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcRequest {
+    Ping,
     CreateSession { target: RunTarget },
     StartRun { session_id: String, input: String },
     ReplayDisplayEvents { run_id: String, after_sequence: u64 },
@@ -44,6 +45,7 @@ enum IpcRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcResponse {
+    Pong,
     Session { session: SessionRecord },
     Run { run: RunRecord },
     DisplayEvents { events: Vec<DisplayEvent> },
@@ -147,6 +149,13 @@ impl LocalDaemonIpcClient {
     pub fn connect(socket_path: impl AsRef<Path>) -> Result<Self, DaemonError> {
         let socket_path = socket_path.as_ref().to_path_buf();
         Ok(Self { socket_path })
+    }
+
+    pub fn ping(&mut self) -> Result<(), DaemonError> {
+        match self.send_request(IpcRequest::Ping)? {
+            IpcResponse::Pong => Ok(()),
+            response => Err(unexpected_ipc_response("pong", response)),
+        }
     }
 
     pub fn create_session(
@@ -253,6 +262,7 @@ fn serve_ipc_connection(
     }
     let request: IpcRequest = serde_json::from_str(&request)?;
     let response = match request {
+        IpcRequest::Ping => IpcResponse::Pong,
         IpcRequest::CreateSession { target } => match client.create_session(target) {
             Ok(session) => IpcResponse::Session { session },
             Err(error) => IpcResponse::Error {

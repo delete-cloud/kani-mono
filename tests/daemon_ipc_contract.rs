@@ -24,6 +24,7 @@ fn unix_socket_daemon_serves_multiple_clients_without_losing_state() {
 
     let session_id = {
         let mut client = LocalDaemonIpcClient::connect(&socket_path).expect("client connects");
+        client.ping().expect("daemon responds to ping");
         let session = client
             .create_session(RunTarget::local_daemon("/workspace"))
             .expect("session is created over ipc");
