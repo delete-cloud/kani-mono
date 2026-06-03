@@ -9,7 +9,7 @@ use crate::daemon::{DaemonError, LocalDaemon};
 #[cfg(unix)]
 use crate::daemon::{LocalDaemonIpcClient, LocalDaemonIpcServer};
 use crate::runtime::AgentRuntime;
-use crate::session::{RunStatus, RunTarget};
+use crate::session::{RunRecord, RunStatus, RunTarget};
 use crate::stream::{DisplayEvent, DisplayEventKind};
 use serde_json::Value;
 use thiserror::Error;
@@ -82,6 +82,10 @@ enum CliCommand {
         target: ClientTarget,
         session_id: String,
         input: String,
+    },
+    RunStatus {
+        target: ClientTarget,
+        run_id: String,
     },
     ReplayDisplay {
         target: ClientTarget,
@@ -228,6 +232,12 @@ impl CliCommand {
                     input: required_flag(rest, "--input")?,
                 })
             }
+            [scope, action, rest @ ..] if scope == "run" && action == "status" => {
+                Ok(Self::RunStatus {
+                    target: required_client_target(rest)?,
+                    run_id: required_flag(rest, "--run")?,
+                })
+            }
             [scope, action, rest @ ..] if scope == "display" && action == "replay" => {
                 let after = required_flag(rest, "--after")?;
                 Ok(Self::ReplayDisplay {
@@ -239,7 +249,7 @@ impl CliCommand {
                 })
             }
             _ => Err(CliError::Usage(
-                "usage: session create (--store PATH | --socket PATH) --workspace PATH | run start (--store PATH | --socket PATH) --session ID --input TEXT | display replay (--store PATH | --socket PATH) --run ID --after SEQ"
+                "usage: session create (--store PATH | --socket PATH) --workspace PATH | run start (--store PATH | --socket PATH) --session ID --input TEXT | run status (--store PATH | --socket PATH) --run ID | display replay (--store PATH | --socket PATH) --run ID --after SEQ"
                     .to_string(),
             )),
         }
@@ -274,6 +284,13 @@ impl CliCommand {
                     run_status_name(&run.status),
                     required_run_result(&run.result)
                 ))
+            }
+            Self::RunStatus { target, run_id } => {
+                let mut client = target.open(runtime)?;
+                let run = client
+                    .run(&run_id)?
+                    .ok_or_else(|| CliError::Usage(format!("run not found: {run_id}")))?;
+                Ok(format_run_status(&run))
             }
             Self::ReplayDisplay {
                 target,
@@ -364,6 +381,14 @@ where
             Self::Socket(client) => client.replay_display_events(run_id, after_sequence),
         }
     }
+
+    fn run(&mut self, run_id: &str) -> Result<Option<RunRecord>, DaemonError> {
+        match self {
+            Self::Store(daemon) => daemon.run(run_id),
+            #[cfg(unix)]
+            Self::Socket(client) => client.run(run_id),
+        }
+    }
 }
 
 fn required_client_target(args: &[String]) -> Result<ClientTarget, CliError> {
@@ -439,6 +464,21 @@ fn required_run_result(result: &Option<String>) -> &str {
     result
         .as_deref()
         .expect("completed CLI run must contain a result")
+}
+
+fn format_run_status(run: &RunRecord) -> String {
+    let mut lines = vec![
+        format!("run_id={}", run.run_id),
+        format!("session_id={}", run.session_id),
+        format!("status={}", run_status_name(&run.status)),
+    ];
+    if let Some(result) = &run.result {
+        lines.push(format!("result={result}"));
+    }
+    if let Some(error) = &run.error {
+        lines.push(format!("error={error}"));
+    }
+    lines.join("\n")
 }
 
 fn required_string_payload<'a>(payload: &'a Value, field: &str) -> &'a str {

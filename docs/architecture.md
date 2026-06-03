@@ -319,12 +319,12 @@ The current Rust codebase has the first architecture contracts in place:
   first local socket IPC server/client for create-session, start-run, and
   display-event replay. It is not yet an HTTP server.
 - `cli` exposes the first client command boundary and binary entrypoint for
-  creating local sessions, starting runs, and replaying DisplayEvent records.
-  It supports direct SQLite-backed `--store` mode and Unix socket-backed
-  `--socket` mode. It also has minimal `daemon serve`, `daemon status`, and
-  `daemon stop` lifecycle commands for Unix socket daemons. The binary still
-  uses the replay runtime seam for direct local runs; real model provider
-  integration remains future work.
+  creating local sessions, starting runs, inspecting durable run status, and
+  replaying DisplayEvent records. It supports direct SQLite-backed `--store`
+  mode and Unix socket-backed `--socket` mode. It also has minimal
+  `daemon serve`, `daemon status`, and `daemon stop` lifecycle commands for
+  Unix socket daemons. The binary still uses the replay runtime seam for direct
+  local runs; real model provider integration remains future work.
 - `sandbox` implements the first workspace-scoped filesystem boundary for local
   paths.
 

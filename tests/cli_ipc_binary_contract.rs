@@ -45,6 +45,17 @@ fn binary_cli_can_use_socket_backed_daemon_client_path() {
     let run_id = value_for_key(&run, "run_id");
     assert_eq!(value_for_key(&run, "result"), "socket answer");
 
+    let status = run_binary(["run", "status", "--socket", socket_arg, "--run", run_id]);
+    assert_eq!(
+        status.lines().collect::<Vec<_>>(),
+        vec![
+            &format!("run_id={run_id}"),
+            &format!("session_id={session_id}"),
+            "status=completed",
+            "result=socket answer",
+        ]
+    );
+
     let replay = run_binary([
         "display", "replay", "--socket", socket_arg, "--run", run_id, "--after", "0",
     ]);
