@@ -9,6 +9,8 @@ use kani_mono::stream::DisplayEventKind;
 #[cfg(unix)]
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
+use std::time::{Duration, Instant};
+#[cfg(unix)]
 use tempfile::tempdir;
 
 #[cfg(unix)]
@@ -54,4 +56,33 @@ fn unix_socket_daemon_serves_multiple_clients_without_losing_state() {
 
     server.stop().expect("ipc server stops");
     assert!(!socket_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_socket_daemon_shutdown_request_stops_server() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("shutdown.sqlite3");
+    let socket_path = dir.path().join("shutdown.sock");
+
+    let server = LocalDaemonIpcServer::start(&socket_path, &db_path, ReplayRuntime::new("unused"))
+        .expect("ipc server starts");
+    let mut client = LocalDaemonIpcClient::connect(&socket_path).expect("client connects");
+
+    client.shutdown().expect("shutdown request is accepted");
+    wait_until_stopped(&server);
+    server.stop().expect("ipc server cleanup is idempotent");
+    assert!(!socket_path.exists());
+}
+
+#[cfg(unix)]
+fn wait_until_stopped(server: &LocalDaemonIpcServer) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if !server.is_running() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("ipc server did not stop after shutdown request");
 }

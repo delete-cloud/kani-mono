@@ -1,5 +1,9 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::sync::mpsc;
+#[cfg(unix)]
+use std::time::Duration;
 
 use crate::daemon::{DaemonError, LocalDaemon};
 #[cfg(unix)]
@@ -46,7 +50,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
     R: AgentRuntime + Clone + Send + 'static,
-    Input: Read,
+    Input: Read + Send + 'static,
     Output: Write,
 {
     let args = args
@@ -57,6 +61,8 @@ where
         serve_daemon(&args[2..], runtime, input, output)
     } else if is_daemon_status(&args) {
         daemon_status(&args[2..], output)
+    } else if is_daemon_stop(&args) {
+        daemon_stop(&args[2..], output)
     } else {
         let output_text = run_cli(args.iter().map(String::as_str), runtime)?;
         if !output_text.is_empty() {
@@ -98,6 +104,10 @@ fn is_daemon_status(args: &[String]) -> bool {
     matches!(args, [scope, action, ..] if scope == "daemon" && action == "status")
 }
 
+fn is_daemon_stop(args: &[String]) -> bool {
+    matches!(args, [scope, action, ..] if scope == "daemon" && action == "stop")
+}
+
 fn daemon_status<Output>(args: &[String], mut output: Output) -> Result<(), CliError>
 where
     Output: Write,
@@ -122,6 +132,30 @@ where
     }
 }
 
+fn daemon_stop<Output>(args: &[String], mut output: Output) -> Result<(), CliError>
+where
+    Output: Write,
+{
+    let socket_path = PathBuf::from(required_flag(args, "--socket")?);
+    #[cfg(unix)]
+    {
+        let mut client = LocalDaemonIpcClient::connect(&socket_path)?;
+        client.shutdown()?;
+        writeln!(output, "daemon_status=stopping")?;
+        writeln!(output, "socket={}", socket_path.display())?;
+        output.flush()?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket_path;
+        let _ = output;
+        Err(CliError::Usage(
+            "daemon stop is only supported on Unix platforms".to_string(),
+        ))
+    }
+}
+
 fn serve_daemon<R, Input, Output>(
     args: &[String],
     runtime: R,
@@ -130,7 +164,7 @@ fn serve_daemon<R, Input, Output>(
 ) -> Result<(), CliError>
 where
     R: AgentRuntime + Clone + Send + 'static,
-    Input: Read,
+    Input: Read + Send + 'static,
     Output: Write,
 {
     let socket_path = PathBuf::from(required_flag(args, "--socket")?);
@@ -146,8 +180,22 @@ where
         )?;
         output.flush()?;
 
-        let mut buffer = Vec::new();
-        input.read_to_end(&mut buffer)?;
+        let (stdin_done_sender, stdin_done_receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let result = input.read_to_end(&mut buffer).map(|_| ());
+            let _ = stdin_done_sender.send(result);
+        });
+        while server.is_running() {
+            match stdin_done_receiver.try_recv() {
+                Ok(result) => {
+                    result?;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(20)),
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
         server.stop()?;
         writeln!(output, "daemon_stopped")?;
         output.flush()?;
