@@ -42,6 +42,17 @@ fn binary_cli_uses_local_daemon_client_path() {
     let run_id = value_for_key(&run_stdout, "run_id");
     assert_eq!(value_for_key(&run_stdout, "result"), "binary answer");
 
+    let status = run_binary(["run", "status", "--store", db_arg, "--run", run_id]);
+    assert_eq!(
+        status.lines().collect::<Vec<_>>(),
+        vec![
+            &format!("run_id={run_id}"),
+            &format!("session_id={session_id}"),
+            "status=completed",
+            "result=binary answer",
+        ]
+    );
+
     let replay = run_binary([
         "display", "replay", "--store", db_arg, "--run", run_id, "--after", "0",
     ]);

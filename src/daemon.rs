@@ -41,6 +41,7 @@ enum IpcRequest {
     Shutdown,
     CreateSession { target: RunTarget },
     StartRun { session_id: String, input: String },
+    GetRun { run_id: String },
     ReplayDisplayEvents { run_id: String, after_sequence: u64 },
 }
 
@@ -50,6 +51,7 @@ enum IpcResponse {
     Stopping,
     Session { session: SessionRecord },
     Run { run: RunRecord },
+    RunLookup { run: Option<RunRecord> },
     DisplayEvents { events: Vec<DisplayEvent> },
     Error { message: String },
 }
@@ -202,6 +204,15 @@ impl LocalDaemonIpcClient {
         }
     }
 
+    pub fn run(&mut self, run_id: &str) -> Result<Option<RunRecord>, DaemonError> {
+        match self.send_request(IpcRequest::GetRun {
+            run_id: run_id.to_string(),
+        })? {
+            IpcResponse::RunLookup { run } => Ok(run),
+            response => Err(unexpected_ipc_response("run lookup", response)),
+        }
+    }
+
     pub fn replay_display_events(
         &mut self,
         run_id: &str,
@@ -309,6 +320,18 @@ fn serve_ipc_connection(
                 IpcConnectionOutcome::Continue,
             ),
         },
+        IpcRequest::GetRun { run_id } => match client.run(&run_id) {
+            Ok(run) => (
+                IpcResponse::RunLookup { run },
+                IpcConnectionOutcome::Continue,
+            ),
+            Err(error) => (
+                IpcResponse::Error {
+                    message: error.to_string(),
+                },
+                IpcConnectionOutcome::Continue,
+            ),
+        },
         IpcRequest::ReplayDisplayEvents {
             run_id,
             after_sequence,
@@ -345,6 +368,10 @@ enum DaemonCommand {
         session_id: String,
         input: String,
         reply: mpsc::Sender<Result<RunRecord, DaemonError>>,
+    },
+    GetRun {
+        run_id: String,
+        reply: mpsc::Sender<Result<Option<RunRecord>, DaemonError>>,
     },
     ReplayDisplayEvents {
         run_id: String,
@@ -393,6 +420,9 @@ impl LocalDaemonProcess {
                         reply,
                     } => {
                         let _ = reply.send(daemon.start_run(&session_id, input));
+                    }
+                    DaemonCommand::GetRun { run_id, reply } => {
+                        let _ = reply.send(daemon.run(&run_id));
                     }
                     DaemonCommand::ReplayDisplayEvents {
                         run_id,
@@ -491,6 +521,13 @@ impl LocalDaemonClient {
         request(&self.sender, |reply| DaemonCommand::ReplayDisplayEvents {
             run_id: run_id.to_string(),
             after_sequence,
+            reply,
+        })?
+    }
+
+    pub fn run(&mut self, run_id: &str) -> Result<Option<RunRecord>, DaemonError> {
+        request(&self.sender, |reply| DaemonCommand::GetRun {
+            run_id: run_id.to_string(),
             reply,
         })?
     }
