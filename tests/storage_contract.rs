@@ -1,7 +1,7 @@
 use kani_mono::controlplane::SessionService;
-use kani_mono::session::{RunStatus, RunTarget};
+use kani_mono::session::{CheckpointRecord, RunStatus, RunTarget};
 use kani_mono::storage::SqliteControlPlaneStore;
-use kani_mono::stream::{RuntimeEvent, RuntimeEventKind};
+use kani_mono::stream::{DisplayEventKind, RuntimeEvent, RuntimeEventKind};
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::tempdir;
@@ -119,5 +119,111 @@ fn sqlite_runtime_events_are_idempotent_and_replay_by_sequence() {
             .map(|event| event.event_id.as_str())
             .collect::<Vec<_>>(),
         vec!["event-2"]
+    );
+}
+
+#[test]
+fn sqlite_projects_and_replays_display_events_by_cursor() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("display.sqlite3");
+    let (first, completed_display) = {
+        let store = SqliteControlPlaneStore::open(&db_path).expect("store opens");
+        let runtime_event = store
+            .append_runtime_event(RuntimeEvent::new(
+                "event-1",
+                "run-1",
+                RuntimeEventKind::ModelDelta,
+                json!({"text": "hello"}),
+            ))
+            .expect("runtime event persists");
+        let first = store
+            .project_display_event(&runtime_event)
+            .expect("display event persists");
+        let duplicate = store
+            .project_display_event(&runtime_event)
+            .expect("duplicate projection returns existing display event");
+        let completed = store
+            .append_runtime_event(RuntimeEvent::new(
+                "event-2",
+                "run-1",
+                RuntimeEventKind::RunCompleted,
+                json!({"result": "done"}),
+            ))
+            .expect("completion persists");
+        let completed_display = store
+            .project_display_event(&completed)
+            .expect("completion display persists");
+
+        assert_eq!(duplicate, first);
+        (first, completed_display)
+    };
+    let reopened = SqliteControlPlaneStore::open(&db_path).expect("store reopens");
+
+    assert_eq!(first.sequence, 1);
+    assert_eq!(first.kind, DisplayEventKind::AssistantTextDelta);
+    assert_eq!(first.payload, json!({"text": "hello"}));
+    assert!(completed_display.sequence > first.sequence);
+    assert_eq!(
+        reopened
+            .replay_display_events("run-1", 0)
+            .expect("display replay succeeds")
+            .iter()
+            .map(|event| event.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            DisplayEventKind::AssistantTextDelta,
+            DisplayEventKind::FinalResult,
+        ]
+    );
+    assert_eq!(
+        reopened
+            .replay_display_events("run-1", first.sequence)
+            .expect("cursor replay succeeds")
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        vec![completed_display.sequence]
+    );
+}
+
+#[test]
+fn sqlite_store_persists_checkpoint_records_by_id_and_run() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("checkpoints.sqlite3");
+    let checkpoint = CheckpointRecord {
+        checkpoint_id: "checkpoint-1".to_string(),
+        run_id: "run-1".to_string(),
+        tape_id: "tape-1".to_string(),
+        visible_head_seq: 42,
+        epoch: 7,
+        context_digest: "context-digest".to_string(),
+        metadata: json!({"reason": "manual"}),
+    };
+
+    {
+        let store = SqliteControlPlaneStore::open(&db_path).expect("store opens");
+        store
+            .save_checkpoint(&checkpoint)
+            .expect("checkpoint persists");
+    }
+    let reopened = SqliteControlPlaneStore::open(&db_path).expect("store reopens");
+
+    assert_eq!(
+        reopened
+            .load_checkpoint("checkpoint-1")
+            .expect("checkpoint load succeeds"),
+        Some(checkpoint.clone())
+    );
+    assert_eq!(
+        reopened
+            .list_checkpoints_for_run("run-1")
+            .expect("checkpoint list succeeds"),
+        vec![checkpoint]
+    );
+    assert!(
+        reopened
+            .list_checkpoints_for_run("run-2")
+            .expect("empty checkpoint list succeeds")
+            .is_empty()
     );
 }
